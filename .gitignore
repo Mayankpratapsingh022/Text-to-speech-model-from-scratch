@@ -1,0 +1,43 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Python tooling files
+.python-version
+.mypy_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+.ruff_cache/
+
+# Virtual environments
+.venv
+venv/
+
+# Large dataset files
+LJSpeech-1.1/
+LJSpeech-1.1.tar.bz2
+*.tar.bz2
+*.tar.gz
+*.zip
+
+# Processed data files
+
+*.csv
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
