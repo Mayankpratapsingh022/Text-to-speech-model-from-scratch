@@ -195,7 +195,7 @@ def TTSCollator():
         mels = [b[1] for b in batch]
         input_lengths = torch.tensor([t.shape[0] for t in texts],dtype=torch.long)
         output_lengths=torch.tensor([m.shape[1] for m in mels],dtype=torch.long)
-        input_lengths, sorted_idx = inpud_lengths.sort(descending=True)
+        input_lengths, sorted_idx = input_lengths.sort(descending=True)
         texts = [texts[i] for i in sorted_idx]
         mels = [mels[i] for i in sorted_idx]
         output_lengths = output_lengths[sorted_idx]
@@ -218,7 +218,7 @@ def TTSCollator():
 
 class BatchSampler:
     def __init__(self,dataset,batch_size,drop_last=False):
-        self.sample = torch.utils.data.SequentialSampler(dataset)
+        self.sampler = torch.utils.data.SequentialSampler(dataset)
         self.batch_size = batch_size
         self.drop_last = drop_last
         self.random_batches = self._make_batches()

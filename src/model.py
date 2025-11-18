@@ -16,7 +16,7 @@ class Tacotron2Config:
 
     ## Encoder config
     encoder_kernel_size:int = 5
-    encoder_n_convolutons: int = 3
+    encoder_n_convolutions: int = 3
     encoder_embed_dim: int = 512
     encoder_dropout_p: float = 0.5
 
@@ -45,7 +45,7 @@ class LinearNorm(nn.Module):
         self.linear = nn.Linear(in_features,out_features,bias=bias)
         torch.nn.init.xavier_uniform_(
             self.linear.weight,
-            gain=torch.nn.init.calcuate_gain(w_init_gain)
+            gain=torch.nn.init.calculate_gain(w_init_gain)
         )
 
     def forward(self,x):
@@ -71,7 +71,7 @@ class ConvNorm(nn.Module):
     ):
         super(ConvNorm,self).__init__()
         if padding is None:
-            pading = "same"
+            padding = (kernel_size - 1) // 2
 
         self.conv = nn.Conv1d(
             in_channels,out_channels,kernel_size=kernel_size,
@@ -96,11 +96,11 @@ class Encoder(nn.Module):
             self.convolutions.append(
                 nn.Sequential(
                     ConvNorm(
-                        in_channels=config.encoder_embed_dim if  i != 0 else config.character_embed_dim,
+                        in_channels=config.encoder_embed_dim if i != 0 else config.character_embed_dim,
                         out_channels=config.encoder_embed_dim,
                         kernel_size=config.encoder_kernel_size,
                         stride=1,
-                        padding="same",
+                        padding=None,
                         dilation=1,
                         w_init_gain="relu"
 
@@ -120,16 +120,44 @@ class Encoder(nn.Module):
     
     def forward(self,x,input_lengths=None):
         x = self.embeddings(x).transpose(1,2)
-        batch_size, channels,seq_len = x.shape
+        batch_size, channels, seq_len = x.shape
         if input_lengths is None:
-            torch.full((batch_size,),fill_value=seq_len,device=x.device)
+            input_lengths = torch.full((batch_size,), fill_value=seq_len, device=x.device)
 
-        for block in self.blocks:
+        for block in self.convolutions:
             x = block(x)
         x = x.transpose(1,2)
         x = pack_padded_sequence(x,input_lengths.cpu(),batch_first=True)
         outputs, _ = self.lstm(x)
         outputs, _ = pad_packed_sequence(outputs,batch_first=True)
-        return outputs
+        return outputs  
+
+class Prenet(nn.Module):
+    def __init__(self,input_dim,prenet_dim,prenet_depth,dropout_p=0.5):
+        super(Prenet,self).__init__()
+        self.dropout_p = dropout_p
+        dims = [input_dim] + [prenet_dim for _ in range(prenet_depth)] 
+
+        self.layers = nn.ModuleList()
+
+        for in_dim, out_dim in zip(dims[:-1],dims[1:]):
+            self.layers.append(
+                nn.Sequential(
+                    LinearNorm(in_features=in_dim,
+                    out_features=out_dim,
+                    bias=False,
+                    w_init_gain="relu"),
+                nn.ReLU()
+                )
+            )
+
+    def forward(self,x):
+        for layer in self.layers:
+            x = F.dropout(layer(x),p=self.dropout_p,training=self.training)
+        return x
+
+
+
+
 
 
