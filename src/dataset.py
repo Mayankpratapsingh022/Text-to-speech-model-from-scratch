@@ -152,7 +152,7 @@ class TTSDataset(Dataset):
         self.min_db = min_db
         self.max_scaled_abs = max_scaled_abs
 
-        self.transcript_lengths = [len(Tokenizer().encode(t)) for t in self.metadata["normalized_transcript"]]
+       
         self.audio_proc = AudioMelConversions(
             num_mels=self.num_mels,
             sampling_rate=self.sample_rate,
@@ -178,7 +178,73 @@ class TTSDataset(Dataset):
         mel= self.audio_proc.audio2mel(audio,do_norm=True)
         return transcript, mel.squeeze(0)
 
+def build_padding_mask(lengths):
+    B = lengths.shape[0]    
+    T = torch.max(lengths).item()
+    mask = torch.zeros(B,T)
+    for i in range(B):
+        mask[i,lengths[i]:] = 1
+    return mask.bool()
+
+
+def TTSCollator():
+    tokenizer = Tokenizer()
+
+    def _collate_fn(batch):
+        texts = [tokenizer.encode(b[0]) for b in batch]
+        mels = [b[1] for b in batch]
+        input_lengths = torch.tensor([t.shape[0] for t in texts],dtype=torch.long)
+        output_lengths=torch.tensor([m.shape[1] for m in mels],dtype=torch.long)
+        input_lengths, sorted_idx = inpud_lengths.sort(descending=True)
+        texts = [texts[i] for i in sorted_idx]
+        mels = [mels[i] for i in sorted_idx]
+        output_lengths = output_lengths[sorted_idx]
+
+        text_padded = torch.nn.utils.rnn.pad_sequence(texts,batch_first=True,padding_value=tokenizer.pad_token_id)
+        max_target_len = max(output_lengths).item()
+        num_mels = mels[0].shape[0]
+
+        mel_padded = torch.zeros((len(mels),num_mels,max_target_len))
+        gate_padded = torch.zeros((len(mels),max_target_len))
+
+        for i, mel in enumerate(mels):
+            t = mel.shape[1]
+            mel_padded[i,:,:t] = mel
+            gate_padded[i,t-1:] = 1
+        mel_padded = mel_padded.transpose(1,2)
+        return text_padded, input_lengths, mel_padded, gate_padded, build_padding_mask(input_lengths), build_padding_mask(output_lengths)
+
+
+
+class BatchSampler:
+    def __init__(self,dataset,batch_size,drop_last=False):
+        self.sample = torch.utils.data.SequentialSampler(dataset)
+        self.batch_size = batch_size
+        self.drop_last = drop_last
+        self.random_batches = self._make_batches()
     
+    def _make_batches(self):
+        indices = [i for i in self.sampler]
+        if self.drop_last:
+            total_size = (len(indices) // self.batch_size) * self.batch_size
+            indices = indices[:total_size]
+
+        batches = [indices[i:i+self.batch_size] for i in range(0,len(indices),self.batch_size)]
+        random_indices = torch.randperm(len(batches))
+        return [batches[i] for i in random_indices]
+    
+    def __iter__(self):
+        for batch in self.random_batches:
+            yield batch
+    def __len__(self):
+        return len(self.random_batches)
+
+
+
+         
+
+
+
 
 
       
