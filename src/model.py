@@ -157,6 +157,69 @@ class Prenet(nn.Module):
         return x
 
 
+class LocationLayer(nn.Module):
+    def __init__(self,attention_n_filters,attention_kernel_size,attention_dim):
+        super(LocationLayer,self).__init__()
+
+        self.conv = ConvNorm(
+            in_channels=2,
+            out_channels=attention_n_filters,
+            kernel_size=attention_kernel_size,
+            padding="same",
+            bias=False
+        )
+        self.proj = LinearNorm(attention_n_filters,attention_dim, bias=False,w_init_gain="tanh")
+
+    def forward(self,attention_weights):
+        attention_weights= self.conv(attention_weights).transpose(1,2)
+        attention_weights = self.proj(attention_weights)
+        return attention_weights
+
+
+
+
+class LocationSensitiveAttention(nn.Module):
+    def __init__(self,attention_dim,decoder_hidden_size,encoder_hidden_size,attention_n_filters,attention_kernel_size):
+        super(LocationSensitiveAttention,self).__init__()
+        self.in_proj = LinearNorm(decoder_hidden_size,attention_dim,bias=True,w_init_gain="tanh")
+        self.enc_proj = LinearNorm(encoder_hidden_size,bias=True,w_init_gain="tanh")
+        self.what_have_i_said = LocationLayer(
+            attention_n_filters,
+            attention_kernel_size,
+            attention_dim
+        )
+        self.energy_proj = LinearNorm(attention_dim,1,bias=False,w_init_gain="tanh")
+        self.reset()
+    
+    def reset(self):
+        self.enc_proj_cache= None
+
+    def _calculate_alignment_energies(self,mel_input,encoder_output,cumulative_attention_weights,mask=None):
+        mel_proj = self.in_proj(mel_input).unsqueeze(1)
+        if self.enc_proj_cache is None:
+            self.enc_proj_cache = self.enc_proj(encoder_output)
+        cumulative_attention_weights = self.what_have_i_said(cumulative_attention_weights)
+        energies = torch.tanh(mel_proj+ self.enc_proj_cache + cumulative_attention_weights)
+        energies = self.energy_proj(energies).squeeze(-1)
+
+        if mask is not None:
+            energies = energies.masked_fill(mask.bool(),-float("inf"))
+        return energies
+
+    def forward(self,mel_input,encoder_output,cumulative_attention_weights,mask=None):
+        energies = self._calculate_alignment_energies(mel_input,encoder_output,cumulative_attention_weights,mask)
+
+        attention_weights = F.softmax(energies,dim=1)
+        attention_context = torch.bmm(attention_weights.unsqueeze(1),encoder_output).squeeze(1)
+
+        return attention_context, attention_weights
+        
+        
+
+
+
+
+
 
 
 
