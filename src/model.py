@@ -215,6 +215,45 @@ class LocationSensitiveAttention(nn.Module):
         return attention_context, attention_weights
         
         
+class PostNet(nn.Module):
+    """
+    To take final generated Mel from LSTM and postprocess to allow for any missing details to be added in
+    """
+    def __init__(self,num_mels,postnet_num_convs=5,postnet_n_filters=512,postnet_kernel_size=5,postnet_dropout_p=0.5):
+        super(PostNet,self).__init__()
+        self.convs = nn.ModuleList()
+        self.convs.append(
+            nn.Sequential(
+                ConvNorm(
+                    num_mels,
+                    postnet_n_filters,
+                    kernel_size=postnet_kernel_size,
+                    padding="same",
+                    w_init_gain="tanh"
+                ),
+                nn.BatchNorm1d(postnet_n_filters),
+                nn.Tanh(),
+                nn.Dropout(postnet_dropout_p)
+            )
+        )
+        for _ in range(postnet_num_convs - 2):
+            self.convs.append(
+                nn.Sequential(
+                    ConvNorm(postnet_n_filters,num_mels,kernel_size=postnet_kernel_size,padding="same"),
+                    nn.BatchNorm1d(num_mels),
+                    nn.Dropout(postnet_dropout_p)
+                )
+
+            )
+    def forward(self,x):
+        x = x.transpose(1,2)
+        for conv_block in self.convs:
+            x = conv_block(x)
+        x = x.transpose(1,2)
+        return x 
+
+        
+
 
 
 
