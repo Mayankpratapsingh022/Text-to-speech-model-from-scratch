@@ -178,11 +178,11 @@ class LocationLayer(nn.Module):
 
 
 
-class LocationSensitiveAttention(nn.Module):
+class LocalSensitiveAttention(nn.Module):
     def __init__(self,attention_dim,decoder_hidden_size,encoder_hidden_size,attention_n_filters,attention_kernel_size):
-        super(LocationSensitiveAttention,self).__init__()
+        super(LocalSensitiveAttention,self).__init__()
         self.in_proj = LinearNorm(decoder_hidden_size,attention_dim,bias=True,w_init_gain="tanh")
-        self.enc_proj = LinearNorm(encoder_hidden_size,bias=True,w_init_gain="tanh")
+        self.enc_proj = LinearNorm(encoder_hidden_size,attention_dim,bias=True,w_init_gain="tanh")
         self.what_have_i_said = LocationLayer(
             attention_n_filters,
             attention_kernel_size,
@@ -252,7 +252,109 @@ class PostNet(nn.Module):
         x = x.transpose(1,2)
         return x 
 
+
+class Decoder(nn.Module):
+    def __init__(self,config):
+        super(Decoder,self).__init__()
+        self.config = config
+        self.prenet = Prenet(
+        input_dim=self.config.num_mels,
+        prenet_dim = self.config.decoder_prenet_dim,
+        prenet_depth = self.config.decoder_prenet_depth)
+
+        self.rnn = nn.ModuleList(
+            [
+                nn.LSTMCell(config.decoder_prenet_dim + config.encoder_embed_dim,config.decoder_embed_dim),
+                nn.LSTMCell(config.decoder_embed_dim + config.encoder_embed_dim,config.decoder_embed_dim)
+
+            ]
+        )
+
+        self.attention = LocalSensitiveAttention(attention_dim=config.attention_dim,
+        decoder_hidden_size=config.decoder_embed_dim,encoder_hidden_size=config.encoder_embed_dim,attention_n_filters=config.attention_location_n_filters,attention_kernel_size=config.attention_location_kernel_size)
+
+        self.mel_proj = LinearNorm(config.decoder_embed_dim + config.encoder_embed_dim,config.num_mels)
+        self.stop_proj = LinearNorm(config.decoder_embed_dim + config.encoder_embed_dim,1,w_init_gain="sigmoid")
+
+        self.postnet = PostNet(
+            num_mels = config.num_mels,
+            postnet_num_convs = config.decoder_postnet_num_convs,
+            postnet_n_filters= config.decoder_postnet_n_filters,
+            postnet_kernel_size= config.decoder_postnet_kernel_size,
+            postnet_dropout_p=config.decoder_postnet_droput_p
+        )
+
+    def _init_decoder(self,encoder_outputs,encoder_mask=None):
+        B,S,E = encoder_outputs.shape
+        device = encoder_outputs.device
+
+        self.h = [torch.zeros(B,self.config.decoder_embed_dim,deivce=device) for _ in range(2)]
+        self.c = [torch.zeros(B,self.config.decoder_embed_dim,device=device) for _ in range(2)]
+        self.cumulative_attn_weight = torch.zeros(B,S,device=device)
+        self.attn_weight = torch.zeros(B,S,device=device)
+        self.attn_context = torch.zeros(B,self.config.encoder_embed_dim,device=device)
+
+        self.encoder_output = encoder_outputs
+        self.encoder_mask = encoder_mask
+    
+    def _bos_frame(self,B):
+        start_frame_zeros=torch.zeros(B,1,self.config.num_mels)
+        return start_frame_zeros
+
+    def decode(self,mel_step):
+        rnn_input = torch.cat([mel_step,self.attn_context],dim=-1)
+        self.h[0],self.c[0] = self.rnn[0](rnn_input,(self.h[0],self.c[0]))
+        attn_hidden = F.dropout(self.h[0],self.config.attention_dropout_p,self.training)
+
+        attn_weights_cat = torch.cat(
+            [
+                self.attn_weight.unsqueeze(1),self.cumulative_attn_weight.unsqueeze(1)
+            ],dim=1
+        )
+        attention_context,attention_weights = self.attention(
+            attn_hidden,
+            self.encoder_outputs,
+            attn_weights_cat,
+            mask=self.encoder_mask
+        )
+
+        self.attn_weight = attention_weights
+        self.cumulative_attn_weight = self.cumulative_attn_weight = attention_weights
+        self.attn_context = attention_context
+
+        decoder_input = torch.cat([attn_hidden,self.attn_context],dim=-1)
         
+        self.h[1], self.c[1] = self.rnn[1](decoder_input,(self.h[1],self.c[1]))
+        decoder_hidden = F.dropout(self.h[1],self.config.decoder_p,self.training)
+        next_pred_input = torch.cat([decoder_hidden,self.attn_context],dim=-1)
+
+        mel_out = self.mel_proj(next_pred_input)
+        stop_out = self.stop_proj(next_pred_input)
+        return mel_out, stop_out, attention_weights
+
+    def forward(self,encoder_outputs,encoder_mask,mels,decoder_mask):
+        start_feature_vector = self._bos_frame(mels.shape[0]).to(encoder_outputs.device)
+        mels_w_start = torch.cat([start_feature_vector,mels],dim=1)
+        self._init_decoder(encoder_outputs,encoder_mask)
+        
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
