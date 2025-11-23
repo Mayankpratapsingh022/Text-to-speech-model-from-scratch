@@ -336,6 +336,102 @@ class Decoder(nn.Module):
         start_feature_vector = self._bos_frame(mels.shape[0]).to(encoder_outputs.device)
         mels_w_start = torch.cat([start_feature_vector,mels],dim=1)
         self._init_decoder(encoder_outputs,encoder_mask)
+
+        mel_outs,stop_tokens, attention_weights = [], [], []
+        T_dec = mels.shape[1]
+        mel_proj = self.prenet(mels_w_start)
+
+        for t in range(T_dec):
+            if t == 0:
+                self.attention.reset() 
+            step_input = mel_proj[:,t,:]
+            mel_out, stop_out, attention_weight = self.decode(step_input)
+            mel_outs.append(mel_out)
+            stop_tokens.append(stop_out)
+            attention_weights.append(attention_weight)
+
+
+            ## Mask
+            decoder_mask = decoder_mask.unsqueeze(-1).bool()
+            mel_outs = mel_outs.masked_fill(decoder_mask,0.0)
+            mel_residual = mel_residual.masked_fill(decoder_mask,0.0)
+            attention_weights = attention_weights.masked_fill(decoder_mask,0.0)
+            stop_tokens = stop_tokens.masked_fill(decoder_mask.squeeze(),1e3)
+
+            return mel_outs, mel_residual, stop_tokens, attention_weights 
+
+    @torch.infernce_model()
+    def inference(self,encoder_output,max_decode_steps=1000):
+        start_feature_vector = self._bos_frame(B=1).squeeze(0)
+        self._init_decoder(encoder_output,encoder_mask=None)
+        mel_outs,  stop_outs, attention_weights = [], [], []
+        _input = start_feature_vector
+        self.attentin.reset()
+
+        while True:
+            _input = self.prenet(_input) 
+            mel_out = stop_out, attention_weight = self.decode(_input)
+            mel_outs.append(mel_out)
+            stop_outs.append(stop_out)
+            attention_weights.append(attention_weight)
+
+            if torch.sigmoid(stop_out) > 0.5:
+                break
+            elif len(mel_outs) >= max_decode_steps:
+                print("Reached Max Decoder Steps")
+                break
+            _input = mel_out
+
+        mel_out = torch.stack(mel_outs,dim=1)
+        stop_outs = torch.stack(stop_outs, dim=1).squeeze()
+        attention_weights = torch.stack(attention_weight,dim=1)
+        mel_residual = self.postnet(mel_outs)
+        return mel_outs, mel_residual, stop_outs, attention_weights
+
+
+
+
+class Tacotron2(nn.Module):
+    def __init__(self,config):
+        super(Tacotron2,self).__init__()
+        
+        self.config = config
+        self.encoder = Encoder(config)
+        self.decoder = Decoder(config)
+    
+    def forward(self,text,input_lengths,mels,encoder_mask,decoder_mask):
+        encoder_padded_outputs = self.encoder(text,input_lengths)
+        mel_outs, mel_residual,stop_tokens, attention_weights = self.decoder(
+            encoder_padded_outputs, encoder_mask,mels,decoder_mask
+        )
+        mel_postnet_out = mel_outs + mel_residual 
+        return mel_outs, mel_postnet, stop_tokens, attention_weights 
+
+    @torch.inference_mode() 
+    def inference(self,text,max_decode_steps=1000):
+        if text.ndim == 1:
+            text = text.unsqueeze(0)
+
+        assert text.shape[0] == 1, "Inference only written for Batch size of 1"
+        encoder_outputs = self.encoder(text)
+        mel_outs, mel_residual,stop_outs, attention_weights = self.decoder.inference(
+            encoder_outputs,max_decode_steps= max_decode_steps
+        )
+
+        mel_postnet_out = mel_outs + mel_residual
+        return mel_postnet_out, attention_weights 
+        
+
+
+    
+        
+
+
+
+
+
+
+
         
 
 
